@@ -1,0 +1,29 @@
+# Local snapshots; never publish these folders.
+.backup/
+.backups/
+
+# Downloaded datasets, scratch output, and local UI captures.
+.data/
+
+# Python caches and environments.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.venv/
+venv/
+
+# Editor and OS files.
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Temporary files and locally trained checkpoints.
+*.log
+*.tmp
+*.part
+models/*.pt
+!models/pytyper.pt

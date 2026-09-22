@@ -1,0 +1,1 @@
+"""pytyper desktop application package."""
