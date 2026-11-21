@@ -12,6 +12,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 from experiments.evaluate import forward, generated, head_losses, predict
+from experiments.variants import DEFAULT_RUN, RUN_VARIANTS, architecture_for
 from model.checkpoint import FEEDBACK_SUFFIX, ROOT, UNIFIED_DECODER, write_spec
 from model.network import TypingEventModel
 from model.runtime import NeuralTypingRuntime
@@ -22,27 +23,6 @@ EPOCHS = 3
 BATCH_SIZE = 48
 CONTROLS_SEED = 251
 SPLIT_DECODER = "split-mixture-v5"
-INPUT_VARIANTS = {
-    "context-3-15": {"target_left": 3, "target_right": 16},
-    "context-6-10": {"target_left": 6, "target_right": 11},
-    "context-3-10": {"target_left": 3, "target_right": 11},
-    "embedding-8": {"embedding_dim": 8},
-    "combined": {"embedding_dim": 8},
-}
-DEFAULT_RUN = "unified-context-3-10"
-UNIFIED_VARIANTS = {
-    DEFAULT_RUN: {},
-    "unified-context-3-15": INPUT_VARIANTS["context-3-15"],
-    "unified-context-6-10": INPUT_VARIANTS["context-6-10"],
-    "unified-embedding-8": {"embedding_dim": 8},
-    "unified-feedback": {"use_previous_gap": True},
-    "unified-gru-residual-fixed": {"gru_residual_alpha": 0.25},
-    "unified-gru-residual-learnable": {"gru_residual_alpha": 0.0, "learnable_gru_residual": True},
-    "unified-timing-mlp": {"mlp_head": "timing"},
-    "unified-wrong-key-mlp": {"mlp_head": "wrong_key"},
-    "unified-action-mlp": {"mlp_head": "action"},
-    "unified-all-heads-mlp": {"gru_residual_alpha": 0.25, "mlp_head": "all"},
-}
 
 
 def experiment_indices(packed):
@@ -171,7 +151,7 @@ def main():
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--seed", type=int, action="append", choices=SEEDS)
     parser.add_argument(
-        "--run", choices=("baseline", "mixture", "feedback", *INPUT_VARIANTS, *UNIFIED_VARIANTS),
+        "--run", choices=RUN_VARIANTS,
         default=DEFAULT_RUN, help="Experiment configuration (default: %(default)s)",
     )
     parser.add_argument("--base", type=Path, default=RELEASE, help="Checkpoint providing the base architecture")
@@ -182,21 +162,10 @@ def main():
     participant_groups = [{packed["participants"][i] for i in group} for group in indices]
     assert all(left.isdisjoint(right) for i, left in enumerate(participant_groups) for right in participant_groups[i+1:])
     print(f"Trials per split: {list(map(len, indices))}, participants: {list(map(len, participant_groups))}", flush=True)
-    architecture = torch.load(args.base, weights_only=True)["architecture"].copy()
-    if (architecture["layers"], architecture["hidden_size"], architecture["event_model_v5"]) != (3, 128, True):
+    base = torch.load(args.base, weights_only=True)["architecture"]
+    if (base["layers"], base["hidden_size"], base["event_model_v5"]) != (3, 128, True):
         raise ValueError("Timing experiments require the 3×128 GRU event model")
-    if args.run == "mixture":
-        architecture.update(unified_timing=True, timing_components=3)
-    if args.run == "feedback":
-        architecture.update(use_previous_gap=True)
-    if args.run in INPUT_VARIANTS:
-        architecture.update(INPUT_VARIANTS[args.run])
-    if args.run in UNIFIED_VARIANTS:
-        architecture.update(
-            INPUT_VARIANTS["context-3-10"], unified_timing=True, timing_components=3,
-            embedding_dim=16, use_previous_gap=False,
-        )
-        architecture.update(UNIFIED_VARIANTS[args.run])
+    architecture = architecture_for(args.run, base)
     for seed in args.seed or SEEDS:
         run(args.run, seed, packed, indices, architecture)
 

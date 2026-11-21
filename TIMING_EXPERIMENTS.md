@@ -164,9 +164,20 @@ of the smaller architecture remain unverified.
 
 ## Reproduction
 
-Run from the project root with PyTorch and the local `.backup/v5` source
-and archive segments. These runs used Windows, Python 3.12.14, and PyTorch
-2.15.0+cpu. Existing experiment artifacts are protected from overwrite.
+Every tested architecture has a name in [experiments/variants.py](experiments/variants.py).
+Build any variant with fresh weights using `build_model(name)`.
+
+```python
+from experiments.variants import build_model
+
+model = build_model("unified-all-heads-mlp")
+```
+
+The repository includes the [training code](training/) and the shipped checkpoint.
+Training and evaluation also need local Aalto archive segments under `.backup/v5/.data/`
+or the prepared `.data/timing/trials.pt` cache. These runs used Windows,
+Python 3.12.14, and PyTorch 2.15.0+cpu. Existing experiment artifacts are protected
+from overwrite.
 
 ```powershell
 python -m unittest discover -s tests

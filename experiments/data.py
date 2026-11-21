@@ -4,7 +4,6 @@ import argparse
 import hashlib
 import json
 import random
-import sys
 import time
 from dataclasses import fields
 from functools import partial
@@ -15,12 +14,10 @@ from torch.utils.data import DataLoader
 
 from model.checkpoint import ROOT
 from model.network import Action, TypingEventModel
-
-# Use the trainer and parser that produced the release.
-BACKUP = ROOT / ".backup/v5"
-sys.path.append(str(BACKUP))
 from training.dataset import TrainingSequence, collate_sequences, load_sequences
 from training.train import run_epoch
+
+BACKUP = ROOT / ".backup/v5"
 
 RELEASE = ROOT / "models/pytyper.pt"
 CACHE = ROOT / ".data/timing"

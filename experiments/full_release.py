@@ -13,12 +13,13 @@ from torch.utils.data import DataLoader, Subset
 from experiments.data import CACHE, RELEASE, SPLIT_SEED, PackedTrials, collate_sequences
 from experiments.data import participant_split, style_statistics, training_counts
 from experiments.evaluate import generated, predict
-from experiments.run import BATCH_SIZE, CONTROLS_SEED, INPUT_VARIANTS, evaluation_collate, train_epoch, training_device
+from experiments.run import BATCH_SIZE, CONTROLS_SEED, evaluation_collate, train_epoch, training_device
+from experiments.variants import FULL_RELEASE_VARIANT, architecture_for
 from model.checkpoint import ROOT, UNIFIED_DECODER, write_spec
 from model.network import Action, TypingEventModel
 from model.runtime import NeuralTypingRuntime
 
-NAME = "unified-residual-action-mlp-full"
+NAME = FULL_RELEASE_VARIANT
 EPOCHS = 4
 LEARNING_RATE = 0.0025
 WEIGHT_DECAY = 0.0001
@@ -47,10 +48,7 @@ def train(packed, release):
     ):
         raise ValueError("Cached trials do not reproduce the shipped training split")
 
-    architecture = release["architecture"] | INPUT_VARIANTS["context-3-10"] | {
-        "unified_timing": True, "timing_components": 3,
-        "gru_residual_alpha": 0.25, "mlp_head": "action",
-    }
+    architecture = architecture_for(NAME, release["architecture"])
     trials = PackedTrials(packed, architecture["target_left"], architecture["target_right"])
     collate = partial(collate_sequences, style_mean=style_mean, style_std=style_std)
     train_loader = DataLoader(Subset(trials, train_indices), batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate)
