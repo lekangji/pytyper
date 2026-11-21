@@ -1,0 +1,68 @@
+{
+  "spec_version": 1,
+  "checkpoint_format": 3,
+  "paths": [
+    "models/pytyper.pt",
+    ".backup/v5/models/human_typist_v5.pt"
+  ],
+  "sha256": "61a190eb551d000667eb2ba7dc674563118c5195462d8533b575ab3055374a7b",
+  "architecture": {
+    "target_left": 6,
+    "target_right": 16,
+    "use_keyboard_features": true,
+    "event_model_v5": true,
+    "embedding_dim": 16,
+    "hidden_size": 128,
+    "layers": 3,
+    "timing_components": 5
+  },
+  "recurrent_module": "GRU",
+  "input_features": 483,
+  "buffer_context": 6,
+  "target_right_includes_current": true,
+  "linear_head_outputs": {
+    "action_head": 3,
+    "wrong_key_head": 95,
+    "pause_head": 3,
+    "timing_head": 90,
+    "hold_head": 6
+  },
+  "parameter_count": 386421,
+  "style": {
+    "features": [
+      "log_median_gap",
+      "log_p90_gap",
+      "correction_rate",
+      "mistake_rate",
+      "log_median_hold",
+      "rollover_rate"
+    ],
+    "bank_rows": 2077,
+    "mean": [
+      -1.8165555000305176,
+      -0.9469591975212097,
+      0.03819182515144348,
+      0.03655381500720978,
+      -2.2760393619537354,
+      0.22084692120552063
+    ],
+    "std": [
+      0.35176214575767517,
+      0.5426102876663208,
+      0.049184419214725494,
+      0.047399573028087616,
+      0.21726909279823303,
+      0.18893828988075256
+    ]
+  },
+  "sampling_temperature": 0.86,
+  "decoder_version": "split-mixture-v5",
+  "source": "model at 7cf0d39 and .backup/v5/model",
+  "inferred_from_source": [
+    "style.features",
+    "recurrent_module",
+    "buffer_context",
+    "target_right_includes_current",
+    "decoder_version"
+  ]
+}

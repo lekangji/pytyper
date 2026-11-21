@@ -55,8 +55,15 @@ class TypingEventModel(nn.Module):
         target_right: int = TARGET_RIGHT,
         use_keyboard_features: bool = False,
         event_model_v5: bool = False,
+        unified_timing: bool = False,
+        use_previous_gap: bool = False,
+        gru_residual_alpha: float | None = None,
+        learnable_gru_residual: bool = False,
+        mlp_head: str | None = None,
     ) -> None:
         super().__init__()
+        if unified_timing and (not event_model_v5 or timing_components != 3):
+            raise ValueError("Unified timing requires action-conditioned holds and three components")
         self.hidden_size = hidden_size
         self.layers = layers
         self.timing_components = timing_components
@@ -64,12 +71,16 @@ class TypingEventModel(nn.Module):
         self.target_right = target_right
         self.use_keyboard_features = use_keyboard_features
         self.event_model_v5 = event_model_v5
+        self.unified_timing = unified_timing
+        self.use_previous_gap = use_previous_gap
         self.style_features = STYLE_FEATURES_WITH_HOLDS if event_model_v5 else STYLE_FEATURES
         self.key_embedding = nn.Embedding(VOCAB_SIZE, embedding_dim, padding_idx=PAD_ID)
         self.action_embedding = nn.Embedding(len(Action) + 1, 8)
         input_size = embedding_dim * (target_left + target_right + BUFFER_CONTEXT + 1) + 8 + self.style_features
         if use_keyboard_features:
             input_size += KEYBOARD_FEATURES
+        if use_previous_gap:
+            input_size += 2
         self.input_projection = nn.Sequential(
             nn.Linear(input_size, hidden_size),
             nn.GELU(),
@@ -79,11 +90,28 @@ class TypingEventModel(nn.Module):
         self.action_head = nn.Linear(hidden_size, len(Action))
         self.wrong_key_head = nn.Linear(hidden_size, len(PRINTABLE_KEYS))
         if event_model_v5:
-            self.pause_head = nn.Linear(hidden_size, len(Action))
-            self.timing_head = nn.Linear(hidden_size, len(Action) * 2 * timing_components * 3)
+            modes = 1 if unified_timing else 2
+            if not unified_timing:
+                self.pause_head = nn.Linear(hidden_size, len(Action))
+            self.timing_head = nn.Linear(hidden_size, len(Action) * modes * timing_components * 3)
             self.hold_head = nn.Linear(hidden_size, len(Action) * 2)
         else:
             self.timing_head = nn.Linear(hidden_size, timing_components * 3)
+        self.gru_residual_alpha = (
+            nn.Parameter(torch.tensor(gru_residual_alpha)) if learnable_gru_residual else gru_residual_alpha
+        )
+        if mlp_head is not None:
+            if mlp_head == "all":
+                head_names = [name for name, _ in self.named_children() if name.endswith("_head")]
+            else:
+                head_names = [f"{mlp_head}_head"]
+            # Keep shared weights and the dropout RNG matched to the linear-head baseline.
+            with torch.random.fork_rng(devices=[]):
+                for head_name in head_names:
+                    out_features = getattr(self, head_name).out_features
+                    setattr(self, head_name, nn.Sequential(
+                        nn.Linear(hidden_size, 64), nn.GELU(), nn.Linear(64, out_features),
+                    ))
 
     def forward(
         self,
@@ -94,7 +122,10 @@ class TypingEventModel(nn.Module):
         style: Tensor,
         hidden: Tensor | None = None,
         keyboard_features: Tensor | None = None,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor | None]:
+        previous_gap: Tensor | None = None,
+        *,
+        lengths: Tensor | None = None,
+    ) -> tuple[Tensor | None, ...]:
         batch, steps, _ = target_context.shape
         target_emb = self.key_embedding(target_context).reshape(batch, steps, -1)
         buffer_emb = self.key_embedding(buffer_context).reshape(batch, steps, -1)
@@ -105,11 +136,36 @@ class TypingEventModel(nn.Module):
             if keyboard_features is None:
                 raise ValueError("This checkpoint requires keyboard transition features")
             parts.append(keyboard_features)
+        if self.use_previous_gap:
+            if previous_gap is None:
+                raise ValueError("This checkpoint requires previous-gap features")
+            parts.append(previous_gap)
         features = torch.cat(parts, dim=-1)
-        recurrent_input = self.input_projection(features)
-        output, hidden = self.gru(recurrent_input, hidden)
+        if lengths is None:
+            recurrent_input = self.input_projection(features)
+            output, hidden = self.gru(recurrent_input, hidden)
+            if self.gru_residual_alpha is not None:
+                output = output + self.gru_residual_alpha * recurrent_input
+        else:
+            # Skip right padding in the projection and GRU, then restore alignment with the loss masks.
+            packed = nn.utils.rnn.pack_padded_sequence(
+                features, lengths.cpu(), batch_first=True, enforce_sorted=False,
+            )
+            recurrent_input = self.input_projection(packed.data)
+            packed_output, hidden = self.gru(packed._replace(data=recurrent_input), hidden)
+            if self.gru_residual_alpha is not None:
+                packed_output = packed_output._replace(
+                    data=packed_output.data + self.gru_residual_alpha * recurrent_input,
+                )
+            output, _ = nn.utils.rnn.pad_packed_sequence(
+                packed_output, batch_first=True, total_length=steps,
+            )
         if self.event_model_v5:
-            timing = self.timing_head(output).reshape(batch, steps, len(Action), 2, self.timing_components, 3)
+            timing = self.timing_head(output)
+            if self.unified_timing:
+                timing = timing.reshape(batch, steps, len(Action), self.timing_components, 3)
+            else:
+                timing = timing.reshape(batch, steps, len(Action), 2, self.timing_components, 3)
             hold = self.hold_head(output).reshape(batch, steps, len(Action), 2)
             return (
                 self.action_head(output),
@@ -118,7 +174,7 @@ class TypingEventModel(nn.Module):
                 timing[..., 1].clamp(-5.0, 1.7),
                 timing[..., 2].clamp(-3.5, 1.2),
                 hidden,
-                self.pause_head(output),
+                None if self.unified_timing else self.pause_head(output),
                 hold[..., 0].clamp(-5.0, 0.0),
                 hold[..., 1].clamp(-3.5, 1.2),
             )

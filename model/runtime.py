@@ -4,22 +4,43 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from itertools import pairwise
 from pathlib import Path
 
 import torch
 from torch import Tensor
 
+from model.checkpoint import read_checkpoint
 from model.controls import SECONDS_PER_CHARACTER_PER_WPM, TypingControls
 from model.keyboard import transition_features
 from model.network import (
     BUFFER_CONTEXT,
     PAD_ID,
+    PAUSE_THRESHOLD,
     PRINTABLE_KEYS,
     Action,
     TypingEventModel,
     char_id,
-    longest_common_prefix,
+)
+from model.timing import (
+    MAX_SAMPLED_GAP,
+    MIN_SAMPLED_GAP,
+    component_log_masses,
+    gap_features,
+    sample_conditioned_log_gap,
+)
+
+
+# WPM, gap power adjustment, and long-gap slope adjustment, fitted to matched-speed recordings.
+SPLIT_SPEED_CALIBRATION = (
+    (20, 0.0, 0.0),
+    (40, -0.075, 0.25),
+    (60, -0.025, 0.70),
+    (80, 0.025, 0.85),
+    (100, 0.025, -0.05),
+    (120, 0.025, 0.0),
+    (160, 0.0, 0.0),
 )
 
 
@@ -32,22 +53,18 @@ class NeuralKeyEvent:
 
 def _encode_state(
     target: str,
-    buffer: str,
+    target_ids: Tensor,
+    cursor: int,
+    wrong_suffix: str,
     previous_key: str,
     previous_action: int,
     style: Tensor,
-    target_left: int,
-    target_right: int,
+    target_width: int,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
-    cursor = longest_common_prefix(target, buffer)
-    target_ids = [
-        char_id(target[index]) if 0 <= index < len(target) else PAD_ID
-        for index in range(cursor - target_left, cursor + target_right)
-    ]
-    suffix = buffer[-BUFFER_CONTEXT:]
+    suffix = (target[max(0, cursor - BUFFER_CONTEXT):cursor] + wrong_suffix)[-BUFFER_CONTEXT:]
     buffer_ids = [PAD_ID] * (BUFFER_CONTEXT - len(suffix)) + [char_id(value) for value in suffix]
     return (
-        torch.tensor([[target_ids]], dtype=torch.long),
+        target_ids[..., cursor:cursor + target_width],
         torch.tensor([[buffer_ids]], dtype=torch.long),
         torch.tensor([[[char_id(previous_key)]]], dtype=torch.long),
         torch.tensor([[[previous_action]]], dtype=torch.long),
@@ -59,14 +76,16 @@ def _encode_state(
 class NeuralTypingRuntime:
     """Load a trained bundle and generate exact, controllable key streams."""
 
-    def __init__(self, model_path: str | Path, seed: int | None = None) -> None:
+    def __init__(
+        self, model_path: str | Path, seed: int | None = None, *, spec_path: str | Path | None = None
+    ) -> None:
         self.path = Path(model_path)
         if not self.path.exists():
             raise FileNotFoundError(
                 f"Trained typing model not found at {self.path}. Restore models/pytyper.pt."
             )
-        bundle = torch.load(self.path, map_location="cpu", weights_only=False)
-        self.model = TypingEventModel(**bundle["architecture"])
+        bundle, architecture, self.decoder_version = read_checkpoint(self.path, spec_path)
+        self.model = TypingEventModel(**architecture)
         self.model.load_state_dict(bundle["model_state"])
         self.model.eval()
         self.styles = bundle["style_bank"].float()
@@ -78,38 +97,51 @@ class NeuralTypingRuntime:
         self._torch_generator = torch.Generator().manual_seed(self._rng.randrange(2**31))
 
     def generate(self, target: str, controls: TypingControls | None = None) -> list[NeuralKeyEvent]:
+        return self.plan(target, controls)[1]
+
+    def plan(
+        self, target: str, controls: TypingControls | None = None
+    ) -> tuple[list[NeuralKeyEvent], list[NeuralKeyEvent]]:
+        """Return sampled events and the same events after speed calibration."""
         if not target:
-            return []
+            return [], []
         controls = (controls or TypingControls()).validated()
+        if self.decoder_version in {"global-mixture-v3", "global-mixture-v4"} and controls.wpm > 160:
+            controls = replace(controls, wpm=160)
         style = self._controlled_style(controls)
         error_offset = self._error_logit_offset(controls.error_rate)
-        buffer = ""
+        cursor = 0
+        wrong_suffix = ""
         previous_key = ""
         previous_action = len(Action)
+        previous_delay = 0.0
         hidden = None
         events: list[NeuralKeyEvent] = []
         max_events = len(target) * 3 + 32
 
         with torch.inference_mode():
+            target_width = self.model.target_left + self.model.target_right
+            padded_ids = [PAD_ID] * self.model.target_left
+            padded_ids.extend(char_id(key) for key in target)
+            padded_ids.extend([PAD_ID] * self.model.target_right)
+            target_ids = torch.tensor([[padded_ids]], dtype=torch.long)
             for step in range(max_events):
-                if buffer == target:
+                if cursor == len(target):
                     break
                 encoded = _encode_state(
-                    target, buffer, previous_key, previous_action, style,
-                    self.model.target_left, self.model.target_right,
+                    target, target_ids, cursor, wrong_suffix, previous_key, previous_action, style, target_width,
                 )
-                outputs = self.model(*encoded[:5], hidden, keyboard_features=encoded[5])
-                action_logits, wrong_logits, mix_logits, means, scales, hidden = outputs[:6]
+                outputs = self._predict_event(encoded, hidden, previous_delay)
+                action_logits, wrong_logits, _, _, _, hidden = outputs[:6]
                 action_logits = action_logits[0, 0] / self.temperature
-                prefix_length = longest_common_prefix(target, buffer)
-                divergence = len(buffer) - prefix_length
+                divergence = len(wrong_suffix)
 
                 if divergence >= 3:
                     action = Action.BACKSPACE
                 else:
                     if divergence > 0:
                         action_logits[Action.CORRECT] = -torch.inf
-                    elif len(buffer) < len(target):
+                    else:
                         # A correction is only valid after a wrong key. This also
                         # makes a requested zero-error session genuinely clean.
                         action_logits[Action.BACKSPACE] = -torch.inf
@@ -121,47 +153,63 @@ class NeuralTypingRuntime:
                     )
 
                 if action == Action.CORRECT:
-                    key = target[len(buffer)]
-                    buffer += key
+                    key = target[cursor]
+                    cursor += 1
                 elif action == Action.BACKSPACE:
                     key = "BACKSPACE"
-                    buffer = buffer[:-1]
+                    wrong_suffix = wrong_suffix[:-1]
                 else:
                     distribution = torch.softmax(wrong_logits[0, 0] / self.temperature, dim=-1)
-                    if divergence == 0 and len(buffer) < len(target) and target[len(buffer)] in PRINTABLE_KEYS:
+                    if self.decoder_version != "global-mixture-v3" and divergence == 0 and target[cursor] in PRINTABLE_KEYS:
                         # A wrong action must not emit the correct character.
-                        distribution[PRINTABLE_KEYS.index(target[len(buffer)])] = 0.0
+                        distribution[PRINTABLE_KEYS.index(target[cursor])] = 0.0
                         distribution /= distribution.sum()
                     key_index = torch.multinomial(distribution, 1, generator=self._torch_generator).item()
                     key = PRINTABLE_KEYS[key_index]
-                    buffer += key
+                    # The v3 decoder can sample the correct character as a wrong key.
+                    if divergence == 0 and key == target[cursor]:
+                        cursor += 1
+                    else:
+                        wrong_suffix += key
 
                 delay, hold = self._sample_event_timing(outputs, action, controls, first=step == 0)
                 events.append(NeuralKeyEvent(key, delay, hold))
                 previous_key = "" if key == "BACKSPACE" else key
                 previous_action = int(action)
+                previous_delay = delay
 
-            while buffer != target:
+            while cursor < len(target):
                 encoded = _encode_state(
-                    target, buffer, previous_key, previous_action, style,
-                    self.model.target_left, self.model.target_right,
+                    target, target_ids, cursor, wrong_suffix, previous_key, previous_action, style, target_width,
                 )
-                outputs = self.model(*encoded[:5], hidden, keyboard_features=encoded[5])
-                _, _, mix_logits, means, scales, hidden = outputs[:6]
-                prefix_length = longest_common_prefix(target, buffer)
-                if len(buffer) > prefix_length:
-                    action, key, buffer = Action.BACKSPACE, "BACKSPACE", buffer[:-1]
+                outputs = self._predict_event(encoded, hidden, previous_delay)
+                hidden = outputs[5]
+                if wrong_suffix:
+                    action, key = Action.BACKSPACE, "BACKSPACE"
+                    wrong_suffix = wrong_suffix[:-1]
                 else:
-                    key = target[len(buffer)]
-                    action, buffer = Action.CORRECT, buffer + key
+                    action, key = Action.CORRECT, target[cursor]
+                    cursor += 1
                 delay, hold = self._sample_event_timing(outputs, action, controls, first=False)
                 events.append(NeuralKeyEvent(key, delay, hold))
                 previous_key = "" if key == "BACKSPACE" else key
                 previous_action = int(action)
+                previous_delay = delay
 
         if self.model.event_model_v5:
-            return self._calibrate_motor_timing(events, len(target), controls)
-        return self._calibrate_timing(events, len(target), controls)
+            return events, self._calibrate_event_timing(
+                events, len(target), controls, tune_pauses=not self.model.unified_timing,
+            )
+        return events, self._calibrate_timing(events, len(target), controls)
+
+    def _predict_event(
+        self, encoded: tuple[Tensor, ...], hidden: Tensor | None, previous_delay: float,
+    ) -> tuple[Tensor | None, ...]:
+        history = None
+        if self.model.use_previous_gap:
+            previous = encoded[4].new_tensor([[previous_delay]])
+            history = gap_features(previous, previous > 0)
+        return self.model(*encoded[:5], hidden, keyboard_features=encoded[5], previous_gap=history)
 
     def _controlled_style(self, controls: TypingControls) -> Tensor:
         if self.model.event_model_v5:
@@ -185,22 +233,29 @@ class NeuralTypingRuntime:
         return ((raw - self.style_mean) / self.style_std).clamp(-4.0, 4.0)
 
     def _sample_event_timing(
-        self, outputs: tuple[Tensor, ...], action: Action, controls: TypingControls, first: bool
+        self, outputs: tuple[Tensor | None, ...], action: Action, controls: TypingControls, first: bool
     ) -> tuple[float, float]:
         _, _, mix, means, scales, _, *extra = outputs
         if not self.model.event_model_v5:
             delay = 0.0 if first else self._sample_delay(mix[0, 0], means[0, 0], scales[0, 0])
             return delay, 0.0
         pause_logits, hold_means, hold_scales = extra
-        pause_probability = torch.sigmoid(
-            pause_logits[0, 0, action] + math.log(controls.pause_tendency)
-        ).item()
-        pause = not first and self._rng.random() < pause_probability
-        mode = int(pause)
-        delay = 0.0 if first else self._sample_mode_delay(
-            mix[0, 0, action, mode], means[0, 0, action, mode],
-            scales[0, 0, action, mode], pause,
-        )
+        delay = 0.0
+        if not first:
+            if self.model.unified_timing:
+                delay = self._sample_mixture_delay(
+                    mix[0, 0, action], means[0, 0, action], scales[0, 0, action], controls.pause_tendency,
+                )
+            else:
+                pause_probability = torch.sigmoid(
+                    pause_logits[0, 0, action] + math.log(controls.pause_tendency)
+                ).item()
+                pause = self._rng.random() < pause_probability
+                mode = int(pause)
+                delay = self._sample_mode_delay(
+                    mix[0, 0, action, mode], means[0, 0, action, mode],
+                    scales[0, 0, action, mode], pause,
+                )
         noise = torch.randn((), generator=self._torch_generator).item()
         hold = math.exp(
             hold_means[0, 0, action].item()
@@ -209,6 +264,21 @@ class NeuralTypingRuntime:
         # Keep emitted holds below common OS key-repeat thresholds. Repeated
         # characters or backspaces would invalidate the planned visible buffer.
         return delay, min(0.18, max(0.02, hold))
+
+    def _sample_mixture_delay(
+        self, logits: Tensor, means: Tensor, scales: Tensor, pause_tendency: float
+    ) -> float:
+        if pause_tendency == 1.0:
+            return self._sample_delay(logits, means, scales)
+        means, scales = means.double(), scales.double()
+        weighted = logits.double().log_softmax(0)[:, None] + component_log_masses(means, scales)
+        short_mass, long_mass = weighted.logsumexp(0)
+        long_gap = self._rng.random() < (long_mass - short_mass + math.log(pause_tendency)).sigmoid().item()
+        log_delay = sample_conditioned_log_gap(
+            weighted[:, int(long_gap)], means, scales, long_gap, self._rng, self._torch_generator,
+        )
+        delay = min(MAX_SAMPLED_GAP, max(MIN_SAMPLED_GAP, math.exp(log_delay)))
+        return max(PAUSE_THRESHOLD, delay) if long_gap else min(math.nextafter(PAUSE_THRESHOLD, 0.0), delay)
 
     def _sample_mode_delay(
         self, logits: Tensor, means: Tensor, scales: Tensor, pause: bool
@@ -220,27 +290,38 @@ class NeuralTypingRuntime:
         return max(0.5, delay) if pause else min(0.499, delay)
 
     @staticmethod
-    def _calibrate_motor_timing(
-        events: list[NeuralKeyEvent], target_characters: int, controls: TypingControls
+    def _calibrate_event_timing(
+        events: list[NeuralKeyEvent], target_characters: int, controls: TypingControls,
+        *, tune_pauses: bool = False,
     ) -> list[NeuralKeyEvent]:
-        motor = sorted(event.delay_before for event in events[1:] if 0 < event.delay_before < 0.5)
-        if not motor:
+        # Fit to recorded validation gap quantiles. Faster plans need less spread in log-gap space.
+        fitted_power = min(1.15, max(0.65, 0.83 - 0.28 * math.log(controls.wpm / 75.0)))
+        tail_adjustment = 0.0
+        if tune_pauses:
+            for left, right in pairwise(SPLIT_SPEED_CALIBRATION):
+                if left[0] <= controls.wpm <= right[0]:
+                    t = (controls.wpm - left[0]) / (right[0] - left[0])
+                    fitted_power += left[1] + t * (right[1] - left[1])
+                    tail_adjustment = left[2] + t * (right[2] - left[2])
+                    break
+        power = fitted_power * controls.rhythm_variation
+        shaped = [event.delay_before ** power for event in events]
+        planned_seconds = math.fsum(shaped)
+        if not planned_seconds:
             return events
-        median = motor[len(motor) // 2]
-        scale = min(2.0, max(0.5, (SECONDS_PER_CHARACTER_PER_WPM / controls.wpm) / median))
-        result = []
-        for event in events:
-            delay = event.delay_before
-            if 0 < delay < 0.5:
-                delay = min(0.499, max(0.008, median * (delay / median) ** controls.rhythm_variation * scale))
-            result.append(NeuralKeyEvent(event.key, delay, event.hold_seconds))
-        # Match overall target speed after pauses and corrections while keeping
-        # their learned relative timing intact.
-        planned_seconds = sum(event.delay_before for event in result)
-        if planned_seconds <= 0:
-            return result
-        adjustment = (target_characters * SECONDS_PER_CHARACTER_PER_WPM / controls.wpm) / planned_seconds
-        return [NeuralKeyEvent(event.key, event.delay_before * adjustment, event.hold_seconds) for event in result]
+
+        # Match overall target speed after including pauses and corrections.
+        target_seconds = target_characters * SECONDS_PER_CHARACTER_PER_WPM / controls.wpm
+        scale = target_seconds / planned_seconds
+        if tail_adjustment:
+            # Bend the long-gap tail continuously, then restore the requested total duration.
+            scaled = [delay * scale for delay in shaped]
+            shaped = [delay + tail_adjustment * max(0.0, delay - 0.35) for delay in scaled]
+            scale = target_seconds / math.fsum(shaped)
+        return [
+            NeuralKeyEvent(event.key, delay * scale, event.hold_seconds)
+            for event, delay in zip(events, shaped)
+        ]
 
     def _error_logit_offset(self, target_rate: float) -> float:
         if target_rate <= 0.0:
@@ -248,10 +329,13 @@ class NeuralTypingRuntime:
         reference = min(0.95, max(0.001, self.reference_error_rate))
         return math.log(target_rate / (1.0 - target_rate)) - math.log(reference / (1.0 - reference))
 
-    @staticmethod
-    def _guide_error_probability(action_logits: Tensor, target_rate: float, offset: float) -> None:
+    def _guide_error_probability(self, action_logits: Tensor, target_rate: float, offset: float) -> None:
         if target_rate <= 0.0:
             action_logits[Action.WRONG] = -torch.inf
+            return
+        if self.decoder_version == "global-mixture-v3":
+            other = torch.stack((action_logits[Action.CORRECT], action_logits[Action.BACKSPACE]))
+            action_logits[Action.WRONG] = torch.logsumexp(other, dim=0) + math.log(target_rate / (1.0 - target_rate))
             return
         # A shared log-odds shift preserves the network's relative preference
         # for making mistakes at difficult versus easy positions.
@@ -284,4 +368,4 @@ class NeuralTypingRuntime:
         ).item()
         noise = torch.randn((), generator=self._torch_generator).item()
         value = math.exp(means[component].item() + math.exp(log_scales[component].item()) * noise)
-        return min(5.0, max(0.008, value))
+        return min(MAX_SAMPLED_GAP, max(MIN_SAMPLED_GAP, value))

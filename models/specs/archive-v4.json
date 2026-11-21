@@ -1,0 +1,60 @@
+{
+  "spec_version": 1,
+  "checkpoint_format": 2,
+  "paths": [
+    ".backup/v5/models/human_typist_v4.pt"
+  ],
+  "sha256": "edcad3d5a298c20153086084479bf5409f8f344f5d3e4a3f8982302e3e1ed1eb",
+  "architecture": {
+    "target_left": 6,
+    "target_right": 16,
+    "use_keyboard_features": true,
+    "event_model_v5": false,
+    "embedding_dim": 16,
+    "hidden_size": 128,
+    "layers": 2,
+    "timing_components": 5
+  },
+  "recurrent_module": "GRU",
+  "input_features": 481,
+  "buffer_context": 6,
+  "target_right_includes_current": true,
+  "linear_head_outputs": {
+    "action_head": 3,
+    "wrong_key_head": 95,
+    "timing_head": 15
+  },
+  "parameter_count": 276257,
+  "style": {
+    "features": [
+      "log_median_gap",
+      "log_p90_gap",
+      "correction_rate",
+      "mistake_rate"
+    ],
+    "bank_rows": 2189,
+    "mean": [
+      -1.8117516040802002,
+      -0.9426413178443909,
+      0.03786217048764229,
+      0.03618772327899933
+    ],
+    "std": [
+      0.34667474031448364,
+      0.5444728136062622,
+      0.04898752272129059,
+      0.04707761108875275
+    ]
+  },
+  "sampling_temperature": 0.86,
+  "decoder_version": "global-mixture-v4",
+  "source": ".backup/v4/model",
+  "inferred_from_source": [
+    "architecture.event_model_v5",
+    "style.features",
+    "recurrent_module",
+    "buffer_context",
+    "target_right_includes_current",
+    "decoder_version"
+  ]
+}

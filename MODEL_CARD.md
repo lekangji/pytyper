@@ -30,9 +30,11 @@ loading. These identifiers do not describe the public release version.
 ## Controls and limits
 
 Speed, error rate, rhythm, and pause controls guide a sampled typing style.
-Requested WPM and error rate are approximate. The decoder constrains planned
-output to the requested final text, but delivery depends on target focus and
-keyboard handling.
+Requested WPM and error rate are approximate in the target application.
+Speed calibration uses a smooth curve fitted to recorded typing to adjust
+gap variation with WPM. It then fits the plan's duration to the requested
+speed. The decoder constrains planned output to the requested final text,
+but delivery depends on target focus and keyboard handling.
 
 Training data contain English sentence transcription rather than spontaneous
 composition. Wrong-key predictions cover printable ASCII. Other target

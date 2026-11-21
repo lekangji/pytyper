@@ -69,6 +69,9 @@ See [`MODEL_CARD.md`](MODEL_CARD.md) for:
 - Model limitations
 - Usage restrictions
 
+The [timing experiments](TIMING_EXPERIMENTS.md) document checkpoint compatibility,
+predictive fit, and the rhythm of generated plans.
+
 ## Project Structure
 
 ```text
