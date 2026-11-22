@@ -32,11 +32,11 @@ def update_report(manifest, results):
     precision = "FP16 autocast with FP32 loss accumulation" if schedule["amp"] else "FP32"
     lines.extend([
         "",
-        "All models were trained from fresh weights with unified three-component timing, "
+        "The three baseline models were trained from fresh weights with unified three-component timing, "
         "three characters behind and ten ahead of the current character, a three-layer 128-unit GRU, "
         "and a fixed 0.25 input skip. The GELU models add a 64-unit hidden layer to each output head. "
         "Only the embedding size and output heads vary across the three runs.", "",
-        f"Training seed `{first['seed']}`. AdamW used learning rate {schedule['learning_rate']}, "
+        f"Baseline training seed `{first['seed']}`. AdamW used learning rate {schedule['learning_rate']}, "
         f"weight decay {schedule['weight_decay']}, and gradient clipping at {schedule['gradient_clip']}. "
         f"Length-bucketed batches used up to {schedule['batch_size_max']} trials and "
         f"{schedule['padded_events_max']:,} padded positions, except for any single longer trial. "
@@ -48,6 +48,11 @@ def update_report(manifest, results):
         "objective and saved the lowest-loss checkpoint. Predictive test metrics use the mean "
         "training style and recorded history. Generation uses the same 128 seeded test prompts per "
         "model and reports both raw and rescaled plans.", "",
+    ])
+    if any("warm_start" in result for result in results):
+        lines.extend(["The [hold-mixture run](#three-component-hold-mixture) fine-tunes "
+                      "`gelu-16d` on the same split.", ""])
+    lines.extend([
         "| Model | Parameters | Epochs | Best epoch | Best validation objective | Training min | Gap NLL | Hold NLL | Rhythm error |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ])
@@ -88,12 +93,14 @@ def update_report(manifest, results):
                       f"and `.data/full-corpus/{name}.json`.", "",
                       "| Epoch | Train objective | Validation objective | Elapsed (s) |",
                       "| ---: | ---: | ---: | ---: |"])
+        if "initial_validation" in result:
+            lines.append(row(0, "—", f"{result['initial_validation']['objective']:.6f}", "—"))
         for epoch in result["epochs"]:
             lines.append(row(epoch["epoch"], f"{epoch['train_objective']:.6f}",
                              f"{epoch['validation_objective']:.6f}", f"{epoch['elapsed_seconds']:.1f}"))
-    lines.extend(["", "The local `.data/full-corpus/results.json` includes all per-head epoch "
-                  "losses, test denominators, calibration bins, mean mixture weights, and full recorded and "
-                  "generated distributions with counts, means and quantiles.", "",
+    lines.extend(["", "The [published metrics](experiments/full_corpus_results.json) include per-head epoch "
+                  "losses, test denominators, calibration bins, mean mixture weights, and observed and "
+                  "generated distributions with counts, means, and quantiles for each run.", "",
                   "Reproduce with `python -m experiments.full_corpus_data` followed by "
                   "`python -m experiments.full_corpus`. The archive belongs at `.data/Keystrokes.zip`.", ""])
     path = ROOT / "TIMING_EXPERIMENTS.md"

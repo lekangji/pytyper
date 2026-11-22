@@ -347,6 +347,8 @@ def main():
         return
     results = [train(name, manifest, splits, device, amp) for name in VARIANTS]
     write_json(results, WORK / "results.json")
+    if (WORK / f"{HOLD_MIXTURE_VARIANT}.json").exists():
+        results.append(train(HOLD_MIXTURE_VARIANT, manifest, splits, device, amp))
     from experiments.full_corpus_report import update_report
     update_report(manifest, results)
 

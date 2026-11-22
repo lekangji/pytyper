@@ -566,15 +566,18 @@ Archive SHA-256: `5fb217e0e1273017a6789c5c7ebcc00eed624f2f6426c284da2077a88e2704
 | validation | 14,028 | 123,808 | 5,403,627 | 4.30% | 5,279,819 | 455,818 | 5,401,664 |
 | test | 14,066 | 123,328 | 5,394,821 | 4.38% | 5,271,493 | 461,770 | 5,393,422 |
 
-All models were trained from fresh weights with unified three-component timing, three characters behind and ten ahead of the current character, a three-layer 128-unit GRU, and a fixed 0.25 input skip. The GELU models add a 64-unit hidden layer to each output head. Only the embedding size and output heads vary across the three runs.
+The three baseline models were trained from fresh weights with unified three-component timing, three characters behind and ten ahead of the current character, a three-layer 128-unit GRU, and a fixed 0.25 input skip. The GELU models add a 64-unit hidden layer to each output head. Only the embedding size and output heads vary across the three runs.
 
-Training seed `20260920`. AdamW used learning rate 0.0025, weight decay 0.0001, and gradient clipping at 1.0. Length-bucketed batches used up to 256 trials and 16,384 padded positions, except for any single longer trial. Training used cuda with FP16 autocast with FP32 loss accumulation. The objective weights were 1.0 for class-weighted action, 0.35 for wrong key, 0.55 for timing and 0.15 for hold. The validation objective uses recorded styles and accumulates each head over its valid events before applying its coefficient. Training stopped after 3 consecutive epochs without a lower validation objective and saved the lowest-loss checkpoint. Predictive test metrics use the mean training style and recorded history. Generation uses the same 128 seeded test prompts per model and reports both raw and rescaled plans.
+Baseline training seed `20260920`. AdamW used learning rate 0.0025, weight decay 0.0001, and gradient clipping at 1.0. Length-bucketed batches used up to 256 trials and 16,384 padded positions, except for any single longer trial. Training used cuda with FP16 autocast with FP32 loss accumulation. The objective weights were 1.0 for class-weighted action, 0.35 for wrong key, 0.55 for timing and 0.15 for hold. The validation objective uses recorded styles and accumulates each head over its valid events before applying its coefficient. Training stopped after 3 consecutive epochs without a lower validation objective and saved the lowest-loss checkpoint. Predictive test metrics use the mean training style and recorded history. Generation uses the same 128 seeded test prompts per model and reports both raw and rescaled plans.
+
+The [hold-mixture run](#three-component-hold-mixture) fine-tunes `gelu-16d` on the same split.
 
 | Model | Parameters | Epochs | Best epoch | Best validation objective | Training min | Gap NLL | Hold NLL | Rhythm error |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | gelu-16d | 386,163 | 17 | 14 | 1.041216 | 21.72 | 0.881396 | 0.375375 | 27.477 |
 | gelu-8d | 363,883 | 21 | 18 | 1.073169 | 21.89 | 0.863279 | 0.373603 | 26.255 |
 | linear-16d | 361,523 | 11 | 8 | 1.078125 | 11.20 | 0.886819 | 0.348692 | 25.665 |
+| gelu-16d-hold-mixture | 387,528 | 58 | 55 | 0.976423 | 67.33 | 0.873668 | 0.363428 | 26.370 |
 
 ### Predictive test metrics
 
@@ -583,6 +586,7 @@ Training seed `20260920`. AdamW used learning rate 0.0025, weight decay 0.0001, 
 | gelu-16d | 0.49182 | 1.60098 | 0.07294 | 89.98% | 9.03% | 53.90% | 0.04606 | 0.44982 | 26.98 | 46.73% |
 | gelu-8d | 0.43170 | 1.66681 | 0.07225 | 89.81% | 9.20% | 52.79% | 0.04654 | 0.46197 | 26.94 | 46.70% |
 | linear-16d | 0.38511 | 1.69408 | 0.07241 | 90.89% | 7.16% | 51.76% | 0.04554 | 0.46952 | 27.16 | 46.40% |
+| gelu-16d-hold-mixture | 0.61789 | 1.51780 | 0.07260 | 90.57% | 8.04% | 56.13% | 0.04632 | 0.44043 | 26.84 | 46.68% |
 
 ### Recorded and generated rhythm
 
@@ -595,6 +599,8 @@ Training seed `20260920`. AdamW used learning rate 0.0025, weight decay 0.0001, 
 | gelu-8d | rescaled | 0.0253 | 0.0057 | 32.76 | 0.74% | 0.02% | 5.43% | 481 | 1.15 | 104 | 148 / 111 |
 | linear-16d | raw | 0.0762 | 0.0078 | 11.44 | 6.56% | 0.77% | 5.12% | 764 | 1.13 | 104 | 203 / 152 |
 | linear-16d | rescaled | 0.0587 | -0.0121 | 31.78 | 0.82% | 0.00% | 5.12% | 469 | 1.13 | 104 | 144 / 112 |
+| gelu-16d-hold-mixture | raw | 0.0479 | 0.0242 | 11.61 | 6.41% | 0.66% | 4.84% | 868 | 1.16 | 106 | 199 / 147 |
+| gelu-16d-hold-mixture | rescaled | 0.0319 | 0.0071 | 32.72 | 0.72% | 0.00% | 4.84% | 528 | 1.16 | 106 | 154 / 113 |
 
 ### gelu-16d epoch history
 
@@ -666,7 +672,73 @@ Local artifacts include `.data/full-corpus/linear-16d.pt`, `.data/full-corpus/li
 | 10 | 1.094110 | 1.086198 | 610.6 |
 | 11 | 1.096171 | 1.091326 | 672.1 |
 
-The local `.data/full-corpus/results.json` includes all per-head epoch losses, test denominators, calibration bins, mean mixture weights, and full recorded and generated distributions with counts, means and quantiles.
+### gelu-16d-hold-mixture epoch history
+
+Local artifacts include `.data/full-corpus/gelu-16d-hold-mixture.pt`, `.data/full-corpus/gelu-16d-hold-mixture.spec.json`, and `.data/full-corpus/gelu-16d-hold-mixture.json`.
+
+| Epoch | Train objective | Validation objective | Elapsed (s) |
+| ---: | ---: | ---: | ---: |
+| 0 | — | 1.040716 | — |
+| 1 | 1.008756 | 1.005680 | 72.4 |
+| 2 | 1.000485 | 1.001766 | 143.9 |
+| 3 | 0.996891 | 0.999627 | 210.6 |
+| 4 | 0.994605 | 0.996969 | 275.3 |
+| 5 | 0.992674 | 0.995399 | 340.6 |
+| 6 | 0.991084 | 0.995844 | 406.7 |
+| 7 | 0.989828 | 0.993311 | 482.3 |
+| 8 | 0.988532 | 0.992058 | 556.2 |
+| 9 | 0.987492 | 0.991803 | 626.3 |
+| 10 | 0.986341 | 0.990921 | 694.5 |
+| 11 | 0.985419 | 0.989679 | 762.6 |
+| 12 | 0.984727 | 0.989563 | 836.0 |
+| 13 | 0.983857 | 0.988224 | 905.8 |
+| 14 | 0.982939 | 0.988044 | 978.0 |
+| 15 | 0.982605 | 0.987466 | 1046.9 |
+| 16 | 0.981953 | 0.987500 | 1113.8 |
+| 17 | 0.981366 | 0.986799 | 1185.5 |
+| 18 | 0.980774 | 0.985936 | 1254.0 |
+| 19 | 0.980414 | 0.986070 | 1324.0 |
+| 20 | 0.979702 | 0.985063 | 1389.9 |
+| 21 | 0.979197 | 0.984872 | 1459.5 |
+| 22 | 0.978663 | 0.984608 | 1530.0 |
+| 23 | 0.978156 | 0.983732 | 1603.6 |
+| 24 | 0.977781 | 0.983666 | 1672.9 |
+| 25 | 0.977357 | 0.982903 | 1739.8 |
+| 26 | 0.976885 | 0.982817 | 1812.1 |
+| 27 | 0.976484 | 0.983241 | 1883.5 |
+| 28 | 0.976191 | 0.982670 | 1958.8 |
+| 29 | 0.975642 | 0.981797 | 2027.8 |
+| 30 | 0.975241 | 0.981997 | 2093.7 |
+| 31 | 0.974877 | 0.981739 | 2163.5 |
+| 32 | 0.974523 | 0.981158 | 2232.5 |
+| 33 | 0.974090 | 0.981168 | 2309.4 |
+| 34 | 0.973899 | 0.980429 | 2378.6 |
+| 35 | 0.973471 | 0.980450 | 2447.2 |
+| 36 | 0.973306 | 0.979769 | 2517.5 |
+| 37 | 0.972747 | 0.980024 | 2595.4 |
+| 38 | 0.972469 | 0.981296 | 2669.0 |
+| 39 | 0.972247 | 0.979502 | 2730.8 |
+| 40 | 0.971917 | 0.979214 | 2793.2 |
+| 41 | 0.971637 | 0.980379 | 2862.9 |
+| 42 | 0.971517 | 0.978654 | 2929.7 |
+| 43 | 0.971047 | 0.978608 | 3006.5 |
+| 44 | 0.970827 | 0.977980 | 3079.0 |
+| 45 | 0.970554 | 0.978488 | 3147.5 |
+| 46 | 0.970306 | 0.978268 | 3215.8 |
+| 47 | 0.970084 | 0.977934 | 3281.8 |
+| 48 | 0.969814 | 0.977742 | 3354.6 |
+| 49 | 0.969560 | 0.977835 | 3423.4 |
+| 50 | 0.969457 | 0.977391 | 3493.8 |
+| 51 | 0.968979 | 0.978231 | 3560.3 |
+| 52 | 0.968871 | 0.977201 | 3628.0 |
+| 53 | 0.968532 | 0.976844 | 3698.3 |
+| 54 | 0.968361 | 0.976744 | 3769.9 |
+| 55 | 0.968108 | 0.976423 | 3838.7 |
+| 56 | 0.967909 | 0.976809 | 3905.0 |
+| 57 | 0.967636 | 0.976745 | 3972.0 |
+| 58 | 0.967498 | 0.977600 | 4039.7 |
+
+The [published metrics](experiments/full_corpus_results.json) include per-head epoch losses, test denominators, calibration bins, mean mixture weights, and observed and generated distributions with counts, means, and quantiles for each run.
 
 Reproduce with `python -m experiments.full_corpus_data` followed by `python -m experiments.full_corpus`. The archive belongs at `.data/Keystrokes.zip`.
 
