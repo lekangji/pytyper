@@ -38,13 +38,9 @@ The progress window reports:
 - Key-entry accuracy
 - Estimated time remaining
 
-The bundled model checkpoint is located at:
-
-```text
-models/pytyper.pt
-```
-
-The application does **not** train or download model weights on launch.
+The desktop app loads the bundled `models/gelu-16d-hold-mixture.pt` by default.
+The original `models/pytyper.pt` is also bundled. Both checkpoints are ready for
+local use after cloning the repository.
 
 ### Input Limits
 
@@ -58,7 +54,7 @@ If a target application mishandles held keys, disable **Key holds / rollover**.
 
 ## Model and Usage Limits
 
-The bundled checkpoint was trained on a physical QWERTY subset of the [Aalto 136M Keystrokes dataset](https://userinterfaces.aalto.fi/136Mkeystrokes/).
+The bundled checkpoints were trained on physical QWERTY data from the [Aalto 136M Keystrokes dataset](https://userinterfaces.aalto.fi/136Mkeystrokes/).
 
 The source dataset permits **research and non-commercial use with attribution**.
 
@@ -78,6 +74,6 @@ predictive fit, and the rhythm of generated plans.
 pytyper/
 ├── app/       Desktop UI and keyboard worker
 ├── model/     Neural network, controls, and inference runtime
-├── models/    Bundled pytyper checkpoint
+├── models/    Bundled pytyper checkpoints
 └── main.py    Application entry point
 ```

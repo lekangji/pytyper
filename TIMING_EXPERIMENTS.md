@@ -553,3 +553,177 @@ Reproduce the run with `python -m experiments.full_release` and score the saved
 checkpoint with `python -m experiments.full_release --compare`.
 See the [checkpoint](.data/timing/unified-residual-action-mlp-full-20260920.pt), [spec](.data/timing/unified-residual-action-mlp-full-20260920.spec.json),
 and [full metrics](experiments/results.json).
+
+## Full Aalto corpus · Unified 3/10 context
+
+The full Aalto ZIP was scanned with the existing physical QWERTY and valid-trial filters. Participants were assigned to train, validation, or test in proportions of 80/10/10 with split seed `20261119`. All eligible trials from each participant stayed in the same split. Style normalization, the sampled style bank, and loss class weights were fit on train only.
+
+Archive SHA-256: `5fb217e0e1273017a6789c5c7ebcc00eed624f2f6426c284da2077a88e270420`. Eligible keystroke entries: 162,056. Malformed entries skipped: 83.
+
+| Split | Participants | Trials | Events | Mistake rate | Gaps | Pauses | Holds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| train | 112,457 | 990,283 | 43,290,250 | 4.35% | 42,299,967 | 3,653,243 | 43,275,579 |
+| validation | 14,028 | 123,808 | 5,403,627 | 4.30% | 5,279,819 | 455,818 | 5,401,664 |
+| test | 14,066 | 123,328 | 5,394,821 | 4.38% | 5,271,493 | 461,770 | 5,393,422 |
+
+All models were trained from fresh weights with unified three-component timing, three characters behind and ten ahead of the current character, a three-layer 128-unit GRU, and a fixed 0.25 input skip. The GELU models add a 64-unit hidden layer to each output head. Only the embedding size and output heads vary across the three runs.
+
+Training seed `20260920`. AdamW used learning rate 0.0025, weight decay 0.0001, and gradient clipping at 1.0. Length-bucketed batches used up to 256 trials and 16,384 padded positions, except for any single longer trial. Training used cuda with FP16 autocast with FP32 loss accumulation. The objective weights were 1.0 for class-weighted action, 0.35 for wrong key, 0.55 for timing and 0.15 for hold. The validation objective uses recorded styles and accumulates each head over its valid events before applying its coefficient. Training stopped after 3 consecutive epochs without a lower validation objective and saved the lowest-loss checkpoint. Predictive test metrics use the mean training style and recorded history. Generation uses the same 128 seeded test prompts per model and reports both raw and rescaled plans.
+
+| Model | Parameters | Epochs | Best epoch | Best validation objective | Training min | Gap NLL | Hold NLL | Rhythm error |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| gelu-16d | 386,163 | 17 | 14 | 1.041216 | 21.72 | 0.881396 | 0.375375 | 27.477 |
+| gelu-8d | 363,883 | 21 | 18 | 1.073169 | 21.89 | 0.863279 | 0.373603 | 26.255 |
+| linear-16d | 361,523 | 11 | 8 | 1.078125 | 11.20 | 0.886819 | 0.348692 | 25.665 |
+
+### Predictive test metrics
+
+| Model | Action NLL | Wrong-key NLL | Long-gap Brier | Action accuracy | Wrong-action recall | Wrong-key accuracy | Wrong-action AP | Wrong-action AUROC | Hold MAE (ms) | Hold within 20 ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| gelu-16d | 0.49182 | 1.60098 | 0.07294 | 89.98% | 9.03% | 53.90% | 0.04606 | 0.44982 | 26.98 | 46.73% |
+| gelu-8d | 0.43170 | 1.66681 | 0.07225 | 89.81% | 9.20% | 52.79% | 0.04654 | 0.46197 | 26.94 | 46.70% |
+| linear-16d | 0.38511 | 1.69408 | 0.07241 | 90.89% | 7.16% | 51.76% | 0.04554 | 0.46952 | 27.16 | 46.40% |
+
+### Recorded and generated rhythm
+
+| Model | Mode | Lag 1 | Lag 2 | Mean burst | Over 500 ms | Over 1 s | Mistake rate | Correction p90 (ms) | Mean Backspace run | Hold p50 (ms) | Word entry / within word p50 (ms) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Reference | observed | 0.3464 | 0.3500 | 9.08 | 8.88% | 1.62% | 5.23% | 1620 | 2.06 | 104 | 207 / 153 |
+| gelu-16d | raw | 0.0746 | 0.0184 | 12.02 | 6.11% | 0.51% | 4.96% | 775 | 1.16 | 105 | 203 / 149 |
+| gelu-16d | rescaled | 0.0583 | 0.0006 | 36.07 | 0.43% | 0.02% | 4.96% | 513 | 1.16 | 105 | 150 / 113 |
+| gelu-8d | raw | 0.0488 | 0.0303 | 11.54 | 6.49% | 0.80% | 5.43% | 866 | 1.15 | 104 | 200 / 150 |
+| gelu-8d | rescaled | 0.0253 | 0.0057 | 32.76 | 0.74% | 0.02% | 5.43% | 481 | 1.15 | 104 | 148 / 111 |
+| linear-16d | raw | 0.0762 | 0.0078 | 11.44 | 6.56% | 0.77% | 5.12% | 764 | 1.13 | 104 | 203 / 152 |
+| linear-16d | rescaled | 0.0587 | -0.0121 | 31.78 | 0.82% | 0.00% | 5.12% | 469 | 1.13 | 104 | 144 / 112 |
+
+### gelu-16d epoch history
+
+Local artifacts include `.data/full-corpus/gelu-16d.pt`, `.data/full-corpus/gelu-16d.spec.json`, and `.data/full-corpus/gelu-16d.json`.
+
+| Epoch | Train objective | Validation objective | Elapsed (s) |
+| ---: | ---: | ---: | ---: |
+| 1 | 1.297510 | 1.140583 | 118.5 |
+| 2 | 1.119048 | 1.096652 | 233.8 |
+| 3 | 1.091197 | 1.076366 | 326.8 |
+| 4 | 1.077607 | 1.074464 | 433.8 |
+| 5 | 1.069061 | 1.062037 | 517.0 |
+| 6 | 1.062388 | 1.062536 | 581.5 |
+| 7 | 1.058145 | 1.053498 | 646.0 |
+| 8 | 1.054271 | 1.044598 | 714.5 |
+| 9 | 1.052106 | 1.053069 | 782.0 |
+| 10 | 1.050018 | 1.051023 | 847.3 |
+| 11 | 1.049100 | 1.044477 | 911.4 |
+| 12 | 1.047760 | 1.045062 | 977.6 |
+| 13 | 1.044473 | 1.043173 | 1041.7 |
+| 14 | 1.046024 | 1.041216 | 1111.7 |
+| 15 | 1.044599 | 1.046482 | 1175.8 |
+| 16 | 1.044469 | 1.043598 | 1241.3 |
+| 17 | 1.045799 | 1.043088 | 1303.1 |
+
+### gelu-8d epoch history
+
+Local artifacts include `.data/full-corpus/gelu-8d.pt`, `.data/full-corpus/gelu-8d.spec.json`, and `.data/full-corpus/gelu-8d.json`.
+
+| Epoch | Train objective | Validation objective | Elapsed (s) |
+| ---: | ---: | ---: | ---: |
+| 1 | 1.324697 | 1.163784 | 60.7 |
+| 2 | 1.150988 | 1.117396 | 122.6 |
+| 3 | 1.121768 | 1.099118 | 186.4 |
+| 4 | 1.107431 | 1.097227 | 249.3 |
+| 5 | 1.098855 | 1.087995 | 310.4 |
+| 6 | 1.092844 | 1.088065 | 370.7 |
+| 7 | 1.090094 | 1.078268 | 432.7 |
+| 8 | 1.087281 | 1.076942 | 494.6 |
+| 9 | 1.085346 | 1.083982 | 556.2 |
+| 10 | 1.085757 | 1.077233 | 616.6 |
+| 11 | 1.087004 | 1.076323 | 676.7 |
+| 12 | 1.086576 | 1.075554 | 737.6 |
+| 13 | 1.085854 | 1.081596 | 797.6 |
+| 14 | 1.084547 | 1.076080 | 866.0 |
+| 15 | 1.085580 | 1.075033 | 932.5 |
+| 16 | 1.086216 | 1.076043 | 994.3 |
+| 17 | 1.084866 | 1.076914 | 1055.5 |
+| 18 | 1.086396 | 1.073169 | 1116.7 |
+| 19 | 1.086066 | 1.080854 | 1177.2 |
+| 20 | 1.088467 | 1.088758 | 1248.9 |
+| 21 | 1.091422 | 1.080320 | 1313.6 |
+
+### linear-16d epoch history
+
+Local artifacts include `.data/full-corpus/linear-16d.pt`, `.data/full-corpus/linear-16d.spec.json`, and `.data/full-corpus/linear-16d.json`.
+
+| Epoch | Train objective | Validation objective | Elapsed (s) |
+| ---: | ---: | ---: | ---: |
+| 1 | 1.269821 | 1.137751 | 59.5 |
+| 2 | 1.135759 | 1.102748 | 118.8 |
+| 3 | 1.114745 | 1.092644 | 177.8 |
+| 4 | 1.105487 | 1.100100 | 242.0 |
+| 5 | 1.099999 | 1.088587 | 307.5 |
+| 6 | 1.097383 | 1.089342 | 366.9 |
+| 7 | 1.095115 | 1.081312 | 427.7 |
+| 8 | 1.093925 | 1.078125 | 487.5 |
+| 9 | 1.093659 | 1.085755 | 548.7 |
+| 10 | 1.094110 | 1.086198 | 610.6 |
+| 11 | 1.096171 | 1.091326 | 672.1 |
+
+The local `.data/full-corpus/results.json` includes all per-head epoch losses, test denominators, calibration bins, mean mixture weights, and full recorded and generated distributions with counts, means and quantiles.
+
+Reproduce with `python -m experiments.full_corpus_data` followed by `python -m experiments.full_corpus`. The archive belongs at `.data/Keystrokes.zip`.
+
+## Three-component hold mixture
+
+`gelu-16d-hold-mixture` starts from epoch 14 of `gelu-16d`. The hold head grows
+from 6 to 27 outputs while preserving the learned rows for the original
+component. All parameters are fine-tuned on the same split with AdamW at
+`0.00025`. The initial validation objective was 1.040716. Epoch 55 reached
+0.976423, and training stopped at epoch 58 after three epochs without improvement.
+
+To reproduce the fine-tuning after training `gelu-16d`, run
+`python -m experiments.full_corpus --variant gelu-16d-hold-mixture`.
+The selected checkpoint is [bundled as the default model](models/gelu-16d-hold-mixture.pt).
+
+## Shipped checkpoint · Common participant holdout
+
+We reconstructed the shipped data range as a contiguous span of 12,630
+eligible participants in Aalto archive order. The resulting split matched the
+checkpoint's complete style bank, style mean and standard deviation, 99,684
+training trials, 11,261 validation trials, and 4,349,953 training events exactly.
+
+The full-corpus test split included 1,091 shipped training participants and 110
+shipped validation participants. We excluded both groups from the comparison
+below. The common holdout contains 113,078 trials from 12,865 participants and
+4,948,395 scored actions and 4,835,317 gaps. Each checkpoint keeps its native context and decoder.
+Predictive evaluation uses the mean training style and recorded event history.
+Gap MAE compares the predicted median with the recorded gap before speed
+calibration. The original model's predictive distribution weights the short and
+long mixtures by the pause classifier and normalizes each to its side of 500 ms.
+Generation uses the same 128 prompts from this subset for all five models,
+with seed 101 for sampling, seed 251 for generation, and a 75 WPM target.
+
+| Model | Parameters | Gap MAE (ms) ↓ | Gap NLL ↓ | Hold MAE (ms) ↓ | Hold NLL ↓ | Action accuracy ↑ | Wrong-key accuracy ↑ | Wrong-action recall ↑ | Long-gap Brier ↓ |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Original shipped | 386,421 | 108.95 | 0.914349 | 27.63 | 0.428353 | 89.22% | 45.54% | 7.69% | 0.07263 |
+| gelu-16d | 386,163 | 107.66 | 0.881201 | 26.99 | 0.372098 | 89.98% | 53.90% | 9.02% | 0.07307 |
+| gelu-8d | 363,883 | 107.72 | 0.863017 | 26.95 | 0.370441 | 89.81% | 52.80% | 9.19% | 0.07238 |
+| linear-16d | 361,523 | 108.46 | 0.886457 | 27.18 | 0.346107 | 90.88% | 51.77% | 7.16% | 0.07253 |
+| gelu-16d-hold-mixture | 387,528 | 107.34 | 0.873492 | 26.85 | 0.362558 | 90.57% | 56.12% | 8.03% | 0.07272 |
+
+| Model | Raw rhythm error ↓ | Rescaled rhythm error ↓ | Combined rhythm error ↓ | Mean burst, raw / rescaled | Gaps over 500 ms, raw / rescaled |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Original shipped | 7.533 | 14.063 | 21.596 | 13.43 / 28.72 | 5.37% / 1.32% |
+| gelu-16d | 6.775 | 17.747 | 24.522 | 12.67 / 38.50 | 5.82% / 0.40% |
+| gelu-8d | 6.360 | 17.082 | 23.442 | 11.55 / 35.72 | 6.61% / 0.63% |
+| linear-16d | 5.629 | 15.996 | 21.625 | 11.47 / 34.21 | 6.66% / 0.74% |
+| gelu-16d-hold-mixture | 5.755 | 14.864 | 20.619 | 11.79 / 31.63 | 6.41% / 0.97% |
+
+The recordings averaged 9.91 keystrokes per burst, and 8.04% of gaps exceeded
+500 ms. All four full-corpus models improved predictive gap and hold likelihood,
+wrong-key accuracy, and raw rhythm error over the original checkpoint. The
+hold-mixture model had the lowest combined rhythm error, gap MAE, and hold MAE.
+The original decoder had the lowest rhythm error after rescaling.
+
+The shipped validation objective of 1.181179 comes from its original split and
+split-timing loss, which also scores a pause classifier. The common holdout
+above uses comparable predictive metrics for both timing formulations.
+
+The initial four-model common-holdout run wrote `.data/full-corpus/common-holdout.json`.

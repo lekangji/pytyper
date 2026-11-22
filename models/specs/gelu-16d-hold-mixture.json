@@ -1,0 +1,65 @@
+{
+  "spec_version": 1,
+  "checkpoint_format": 4,
+  "paths": [
+    "models/gelu-16d-hold-mixture.pt"
+  ],
+  "sha256": "303982ee118840b4bcd2924f90a6c71579f49d5718ab7f237ad7982100cb55a3",
+  "architecture": {
+    "target_left": 3,
+    "target_right": 11,
+    "use_keyboard_features": true,
+    "event_model_v5": true,
+    "embedding_dim": 16,
+    "hidden_size": 128,
+    "layers": 3,
+    "timing_components": 3,
+    "unified_timing": true,
+    "use_previous_gap": false,
+    "gru_residual_alpha": 0.25,
+    "mlp_head": "all",
+    "hold_components": 3
+  },
+  "recurrent_module": "GRU",
+  "input_features": 355,
+  "buffer_context": 6,
+  "target_right_includes_current": true,
+  "linear_head_outputs": {},
+  "parameter_count": 387528,
+  "style": {
+    "features": [
+      "log_median_gap",
+      "log_p90_gap",
+      "correction_rate",
+      "mistake_rate",
+      "log_median_hold",
+      "rollover_rate"
+    ],
+    "bank_rows": 2051,
+    "mean": [
+      -1.8036608695983887,
+      -0.9281686544418335,
+      0.039084743708372116,
+      0.03737508878111839,
+      -2.2753520011901855,
+      0.21622735261917114
+    ],
+    "std": [
+      0.3540913164615631,
+      0.5469546914100647,
+      0.049494724720716476,
+      0.04763227328658104,
+      0.2194506824016571,
+      0.18650411069393158
+    ]
+  },
+  "sampling_temperature": 0.86,
+  "decoder_version": "unified-mixture-v1",
+  "source": "experiments/full_corpus.py",
+  "inferred_from_source": [
+    "style.features",
+    "recurrent_module",
+    "buffer_context",
+    "target_right_includes_current"
+  ]
+}

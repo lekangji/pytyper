@@ -15,7 +15,7 @@ from model.timing import component_log_masses, gap_features
 
 
 def head_losses(outputs, batch, action_weights=None):
-    action, wrong, mix, means, scales, _, pause, hold_means, hold_scales = outputs
+    action, wrong, mix, means, scales, _, pause, hold_means, hold_scales, *hold_mix = outputs
     actions = batch["actions"]
     mask = batch["mask"]
     timing = mask & batch["timing_mask"]
@@ -25,14 +25,20 @@ def head_losses(outputs, batch, action_weights=None):
     action_indices = actions[timing]
     row, step = timing.nonzero(as_tuple=True)
     key = (row, step, action_indices)
+    hold_row, hold_step = holds.nonzero(as_tuple=True)
+    hold_key = (hold_row, hold_step, actions[holds])
+    hold_means = hold_means[hold_key]
+    hold_scales = hold_scales[hold_key]
+    if hold_mix:
+        hold_logits = hold_mix[0][hold_key]
+    else:
+        hold_means = hold_means.unsqueeze(-1)
+        hold_scales = hold_scales.unsqueeze(-1)
+        hold_logits = torch.zeros_like(hold_means)
     result = {
         "action": F.cross_entropy(action[mask], actions[mask], weight=action_weights, reduction="none"),
         "wrong_key": F.cross_entropy(wrong[wrong_keys], batch["wrong_keys"][wrong_keys], reduction="none"),
-        "hold": lognormal_mixture_nll(
-            batch["holds"][holds], torch.zeros_like(hold_means[holds][:, :1]),
-            hold_means[holds].gather(1, actions[holds].unsqueeze(1)),
-            hold_scales[holds].gather(1, actions[holds].unsqueeze(1)),
-        ),
+        "hold": lognormal_mixture_nll(batch["holds"][holds], hold_logits, hold_means, hold_scales),
     }
     selected = (*key, side.long()) if pause is not None else key
     params = mix[selected], means[selected], scales[selected]
@@ -49,7 +55,22 @@ def head_accuracy(outputs, batch):
     wrong_mask = mask & (actions == Action.WRONG)
     hold_mask = mask & batch["hold_mask"]
     action_correct = outputs[0].argmax(-1) == actions
-    hold_medians = outputs[7][hold_mask].gather(1, actions[hold_mask].unsqueeze(1)).squeeze(1).exp()
+    row, step = hold_mask.nonzero(as_tuple=True)
+    hold_key = (row, step, actions[hold_mask])
+    hold_means = outputs[7][hold_key]
+    if len(outputs) > 9:
+        weights = outputs[9][hold_key].softmax(-1)
+        scales = outputs[8][hold_key].exp() * math.sqrt(2.0)
+        # The mixture median lies between the smallest and largest component medians.
+        low = hold_means.amin(-1, keepdim=True)
+        high = hold_means.amax(-1, keepdim=True)
+        for _ in range(20):
+            midpoint = (low + high) * 0.5
+            above_median = (weights * torch.erf((midpoint - hold_means) / scales)).sum(-1, keepdim=True) >= 0
+            low = torch.where(above_median, low, midpoint)
+            high = torch.where(above_median, midpoint, high)
+        hold_means = ((low + high) * 0.5).squeeze(-1)
+    hold_medians = hold_means.exp()
     hold_error_ms = 1000 * (hold_medians - batch["holds"][hold_mask]).abs()
     return {
         "action_accuracy": action_correct[mask],

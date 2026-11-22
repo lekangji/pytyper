@@ -27,3 +27,4 @@ Thumbs.db
 *.part
 models/*.pt
 !models/pytyper.pt
+!models/gelu-16d-hold-mixture.pt

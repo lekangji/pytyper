@@ -60,13 +60,17 @@ class TypingEventModel(nn.Module):
         gru_residual_alpha: float | None = None,
         learnable_gru_residual: bool = False,
         mlp_head: str | None = None,
+        hold_components: int = 1,
     ) -> None:
         super().__init__()
         if unified_timing and (not event_model_v5 or timing_components != 3):
             raise ValueError("Unified timing requires action-conditioned holds and three components")
+        if hold_components != 1 and (not unified_timing or hold_components != 3):
+            raise ValueError("Three-component holds require unified timing")
         self.hidden_size = hidden_size
         self.layers = layers
         self.timing_components = timing_components
+        self.hold_components = hold_components
         self.target_left = target_left
         self.target_right = target_right
         self.use_keyboard_features = use_keyboard_features
@@ -94,7 +98,8 @@ class TypingEventModel(nn.Module):
             if not unified_timing:
                 self.pause_head = nn.Linear(hidden_size, len(Action))
             self.timing_head = nn.Linear(hidden_size, len(Action) * modes * timing_components * 3)
-            self.hold_head = nn.Linear(hidden_size, len(Action) * 2)
+            hold_parameters = 2 if hold_components == 1 else hold_components * 3
+            self.hold_head = nn.Linear(hidden_size, len(Action) * hold_parameters)
         else:
             self.timing_head = nn.Linear(hidden_size, timing_components * 3)
         self.gru_residual_alpha = (
@@ -166,7 +171,16 @@ class TypingEventModel(nn.Module):
                 timing = timing.reshape(batch, steps, len(Action), self.timing_components, 3)
             else:
                 timing = timing.reshape(batch, steps, len(Action), 2, self.timing_components, 3)
-            hold = self.hold_head(output).reshape(batch, steps, len(Action), 2)
+            hold = self.hold_head(output)
+            # Keep every original mean and scale row at its saved index.
+            old_width = len(Action) * 2
+            hold_parameters = hold[..., :old_width].reshape(batch, steps, len(Action), 2)
+            hold_logits = ()
+            if self.hold_components > 1:
+                added = hold[..., old_width:].reshape(batch, steps, len(Action), 7)
+                hold_logits = (added[..., :3],)
+                other_components = added[..., 3:].reshape(batch, steps, len(Action), 2, 2)
+                hold_parameters = torch.cat((hold_parameters.unsqueeze(-2), other_components), dim=-2)
             return (
                 self.action_head(output),
                 self.wrong_key_head(output),
@@ -175,8 +189,9 @@ class TypingEventModel(nn.Module):
                 timing[..., 2].clamp(-3.5, 1.2),
                 hidden,
                 None if self.unified_timing else self.pause_head(output),
-                hold[..., 0].clamp(-5.0, 0.0),
-                hold[..., 1].clamp(-3.5, 1.2),
+                hold_parameters[..., 0].clamp(-5.0, 0.0),
+                hold_parameters[..., 1].clamp(-3.5, 1.2),
+                *hold_logits,
             )
         timing = self.timing_head(output).reshape(batch, steps, self.timing_components, 3)
         return (

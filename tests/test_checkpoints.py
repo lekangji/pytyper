@@ -7,6 +7,7 @@ from pathlib import Path
 
 import torch
 
+from app.config import TypingConfig
 from model.controls import SECONDS_PER_CHARACTER_PER_WPM, TypingControls
 from model.runtime import NeuralTypingRuntime
 
@@ -15,6 +16,18 @@ GOLDEN = Path(__file__).with_name("golden_plans.json")
 
 
 class CheckpointTests(unittest.TestCase):
+    def test_new_bundled_default_loads_and_generates(self):
+        config = TypingConfig("The quick brown fox.", 0, TypingControls())
+        checkpoint = ROOT / config.model_path
+        self.assertEqual(checkpoint.name, "gelu-16d-hold-mixture.pt")
+        spec = ROOT / "models" / "specs" / f"{checkpoint.stem}.json"
+        runtime = NeuralTypingRuntime(checkpoint, seed=251, spec_path=spec)
+        self.assertTrue(runtime.model.unified_timing)
+        self.assertEqual(runtime.model.hold_components, 3)
+        events = runtime.generate(config.text, TypingControls(error_rate=0.0))
+        self.assertEqual("".join(event.key for event in events), config.text)
+        self.assertTrue(all(0.02 <= event.hold_seconds <= 0.18 for event in events))
+
     def test_original_plans_and_replay(self):
         torch.set_num_threads(1)
         fixture = json.loads(GOLDEN.read_text(encoding="utf-8"))

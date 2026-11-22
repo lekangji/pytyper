@@ -24,15 +24,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from app.config import TypingConfig
+from app.config import DEFAULT_MODEL_PATH, TypingConfig
 from app.progress_overlay import ProgressOverlay, reduced_motion_enabled
 from app.typing_worker import TypingWorker, preload_runtime
 from model.controls import TypingControls
 
 
 class PytyperWindow(QMainWindow):
-    MODEL_DIR = Path(__file__).resolve().parents[1] / "models"
-    MODEL_PATH = MODEL_DIR / "pytyper.pt"
+    MODEL_PATH = DEFAULT_MODEL_PATH
     MAX_FILE_BYTES = 2 * 1024 * 1024
 
     def __init__(self) -> None:

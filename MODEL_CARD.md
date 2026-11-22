@@ -7,25 +7,32 @@ demonstrations. It models desktop sentence-transcription typing, including
 pauses, mistakes, corrections, key holds, and some overlapping presses. It is not
 intended for biometric impersonation.
 
-The checkpoint metadata identifies the source as a physical QWERTY subset of
+Both checkpoints use physical QWERTY data from
 Dhakal et al., [*Observations on Typing from 136 Million Keystrokes*](https://userinterfaces.aalto.fi/136Mkeystrokes/)
 (CHI 2018). The dataset source permits research and non-commercial use with
 attribution. Commercial use requires permission from the dataset authors.
 
-## Bundled checkpoint
+## Bundled checkpoints
 
-`models/pytyper.pt` contains a three-layer GRU with intended-text and visible
-buffer context, previous key and action, keyboard transition features, and a
-six-value session style. Output heads predict the next action, a wrong key when
-applicable, pause choice, event timing, and key-hold duration.
+**Default model.** `models/gelu-16d-hold-mixture.pt` uses three 128-unit GRU
+layers, 16-dimensional key embeddings, and 64-unit GELU output heads. It sees
+three characters behind and ten ahead of the current character. Separate
+three-component log-normal mixtures predict the gap before a keypress and the
+duration of its hold, conditioned on the action. Its full-corpus training split
+contains 990,283 trials and 43,290,250 events. Fine-tuning started from the
+`gelu-16d` checkpoint and selected epoch 55 at a validation loss of 0.976423.
+See the [checkpoint spec](models/specs/gelu-16d-hold-mixture.json).
 
-Checkpoint metadata reports 99,684 training trials, 11,261 validation trials,
-4,349,953 training events, and a best validation loss of 1.1812. These are
-training records, not a measure of perceived realism. No blinded human
-evaluation is supplied.
+**Original model.** `models/pytyper.pt` uses a three-layer GRU with a separate
+pause classifier and a single log-normal hold distribution per action. Its
+metadata reports 99,684 training trials, 11,261 validation trials, 4,349,953
+training events, and a best validation loss of 1.1812 under its original
+objective. See the [checkpoint spec](models/specs/release.json).
 
-The checkpoint stores internal architecture and format identifiers needed for
-loading. These identifiers do not describe the public release version.
+Both checkpoints use intended-text and visible-buffer context, previous key and
+action, keyboard transition features, and a six-value session style. The
+[common holdout](TIMING_EXPERIMENTS.md#shipped-checkpoint--common-participant-holdout)
+compares predictive accuracy and generated rhythm under the same protocol.
 
 ## Controls and limits
 

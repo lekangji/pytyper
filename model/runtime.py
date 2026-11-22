@@ -81,9 +81,7 @@ class NeuralTypingRuntime:
     ) -> None:
         self.path = Path(model_path)
         if not self.path.exists():
-            raise FileNotFoundError(
-                f"Trained typing model not found at {self.path}. Restore models/pytyper.pt."
-            )
+            raise FileNotFoundError(f"Restore the trained typing checkpoint at {self.path}.")
         bundle, architecture, self.decoder_version = read_checkpoint(self.path, spec_path)
         self.model = TypingEventModel(**architecture)
         self.model.load_state_dict(bundle["model_state"])
@@ -239,7 +237,7 @@ class NeuralTypingRuntime:
         if not self.model.event_model_v5:
             delay = 0.0 if first else self._sample_delay(mix[0, 0], means[0, 0], scales[0, 0])
             return delay, 0.0
-        pause_logits, hold_means, hold_scales = extra
+        pause_logits, hold_means, hold_scales, *hold_logits = extra
         delay = 0.0
         if not first:
             if self.model.unified_timing:
@@ -256,11 +254,11 @@ class NeuralTypingRuntime:
                     mix[0, 0, action, mode], means[0, 0, action, mode],
                     scales[0, 0, action, mode], pause,
                 )
-        noise = torch.randn((), generator=self._torch_generator).item()
-        hold = math.exp(
-            hold_means[0, 0, action].item()
-            + math.exp(hold_scales[0, 0, action].item()) * noise
-        )
+        hold_key = (0, 0, action)
+        if hold_logits:
+            hold = self._sample_lognormal_mixture(hold_logits[0][hold_key], hold_means[hold_key], hold_scales[hold_key])
+        else:
+            hold = self._sample_lognormal(hold_means[hold_key], hold_scales[hold_key])
         # Keep emitted holds below common OS key-repeat thresholds. Repeated
         # characters or backspaces would invalidate the planned visible buffer.
         return delay, min(0.18, max(0.02, hold))
@@ -363,9 +361,15 @@ class NeuralTypingRuntime:
         ]
 
     def _sample_delay(self, logits: Tensor, means: Tensor, log_scales: Tensor) -> float:
+        value = self._sample_lognormal_mixture(logits, means, log_scales)
+        return min(MAX_SAMPLED_GAP, max(MIN_SAMPLED_GAP, value))
+
+    def _sample_lognormal_mixture(self, logits: Tensor, means: Tensor, log_scales: Tensor) -> float:
         component = torch.multinomial(
             torch.softmax(logits, dim=-1), 1, generator=self._torch_generator
         ).item()
+        return self._sample_lognormal(means[component], log_scales[component])
+
+    def _sample_lognormal(self, mean: Tensor, log_scale: Tensor) -> float:
         noise = torch.randn((), generator=self._torch_generator).item()
-        value = math.exp(means[component].item() + math.exp(log_scales[component].item()) * noise)
-        return min(MAX_SAMPLED_GAP, max(MIN_SAMPLED_GAP, value))
+        return math.exp(mean.item() + math.exp(log_scale.item()) * noise)
